@@ -27,7 +27,7 @@ const ALLOWED_MEDIA_TYPES = [
   "audio/webm",
 ];
 const TODO_COLUMNS =
-  "id, title, description, is_completed, due_date, created_at, media_path, media_type, media_name";
+  "id, title, description, is_completed, due_date, created_at, media_path, media_type, media_name, media_provider";
 
 function formatDate(date) {
   if (!date) return "";
@@ -63,22 +63,14 @@ function validateMedia(file) {
   return "";
 }
 
-function mediaExtension(file) {
-  const extensionByType = {
-    "image/jpeg": "jpg",
-    "image/png": "png",
-    "image/gif": "gif",
-    "image/webp": "webp",
-    "image/avif": "avif",
-    "video/mp4": "mp4",
-    "video/webm": "webm",
-    "video/quicktime": "mov",
-    "audio/mpeg": "mp3",
-    "audio/mp4": "m4a",
-    "audio/wav": "wav",
-    "audio/ogg": "ogg",
+function driveMediaUrls(fileId, mimeType) {
+  const encodedId = encodeURIComponent(fileId);
+  return {
+    media_url: mimeType?.startsWith("image/")
+      ? `https://drive.google.com/thumbnail?id=${encodedId}&sz=w1000`
+      : `https://drive.google.com/file/d/${encodedId}/view`,
+    media_preview_url: `https://drive.google.com/file/d/${encodedId}/preview`,
   };
-  return extensionByType[file.type] || "webm";
 }
 
 export default function HomePage() {
@@ -158,6 +150,12 @@ export default function HomePage() {
             const todosWithMedia = await Promise.all(
               data.map(async (todo) => {
                 if (!todo.media_path) return todo;
+                if (todo.media_provider === "drive") {
+                  return {
+                    ...todo,
+                    ...driveMediaUrls(todo.media_path, todo.media_type),
+                  };
+                }
                 const { data: signedData, error: signedError } = await supabase.storage
                   .from(MEDIA_BUCKET)
                   .createSignedUrl(todo.media_path, 60 * 60 * 24);
@@ -207,47 +205,86 @@ export default function HomePage() {
     setAuthBusy(false);
   }
 
-  async function uploadTodoMedia(todo, file) {
-    const path = `${session.user.id}/${todo.id}/${crypto.randomUUID()}.${mediaExtension(file)}`;
-    const { error: uploadError } = await supabase.storage
-      .from(MEDIA_BUCKET)
-      .upload(path, file, { contentType: file.type, upsert: false });
+  async function handleGoogleAuth() {
+    setAuthBusy(true);
+    setAuthError("");
+    setAuthMessage("");
 
-    if (uploadError) {
-      throw new Error(`Gagal mengunggah media: ${readableError(uploadError)}`);
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: window.location.origin,
+        },
+      });
+
+      if (error) {
+        setAuthError(readableError(error));
+        setAuthBusy(false);
+      }
+    } catch (error) {
+      setAuthError(readableError(error));
+      setAuthBusy(false);
+    }
+  }
+
+  async function uploadDriveFile(todoId, file) {
+    const { data: authData, error: authError } = await supabase.auth.getSession();
+    if (authError || !authData.session?.access_token) {
+      throw new Error(readableError(authError || new Error("Sesi login tidak ditemukan.")));
     }
 
-    const { data, error } = await supabase
-      .from("todos")
-      .update({
-        media_path: path,
-        media_type: file.type,
-        media_name: file.name,
-      })
-      .eq("id", todo.id)
-      .select(TODO_COLUMNS)
-      .single();
+    const formData = new FormData();
+    formData.set("todoId", todoId);
+    formData.set("file", file);
+    const response = await fetch("/api/media/upload", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${authData.session.access_token}` },
+      body: formData,
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.error || "Gagal mengunggah media ke Google Drive.");
+    }
 
-    if (error) {
-      const { error: cleanupError } = await supabase.storage
+    return result.file;
+  }
+
+  async function deleteDriveMedia(fileId) {
+    try {
+      const { data, error } = await supabase.auth.getSession();
+      if (error || !data.session?.access_token) {
+        return readableError(error || new Error("Sesi login tidak ditemukan."));
+      }
+
+      const response = await fetch(
+        `/api/media/${encodeURIComponent(fileId)}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${data.session.access_token}` },
+        },
+      );
+      const result = await response.json();
+      return response.ok ? "" : result.error || "Gagal menghapus file dari Drive.";
+    } catch (requestError) {
+      return readableError(requestError);
+    }
+  }
+
+  async function deleteTodoMedia(todo) {
+    if (todo.media_provider === "drive") {
+      const error = await deleteDriveMedia(todo.media_path);
+      return error ? new Error(error) : null;
+    }
+
+    try {
+      const { error } = await supabase.storage
         .from(MEDIA_BUCKET)
-        .remove([path]);
-      const cleanupMessage = cleanupError
-        ? ` File upload sementara juga gagal dibersihkan: ${readableError(cleanupError)}`
-        : "";
-      throw new Error(`${readableError(error)}${cleanupMessage}`);
+        .remove([todo.media_path]);
+      return error || null;
+    } catch (error) {
+      return error instanceof Error ? error : new Error("Gagal menghapus media lama.");
     }
-
-    const { data: signedData, error: signedError } = await supabase.storage
-      .from(MEDIA_BUCKET)
-      .createSignedUrl(path, 60 * 60 * 24);
-
-    return {
-      todo: { ...data, media_url: signedData?.signedUrl },
-      mediaError: signedError
-        ? `Media tersimpan, tetapi preview gagal dibuka: ${readableError(signedError)}`
-        : "",
-    };
   }
 
   async function addTodo(event) {
@@ -277,26 +314,55 @@ export default function HomePage() {
       setTodoError(readableError(error));
     } else {
       let createdTodo = data;
-      let mediaError = "";
+      let uploadedDriveId = null;
       try {
         if (mediaFile) {
-          const uploadResult = await uploadTodoMedia(data, mediaFile);
-          createdTodo = uploadResult.todo;
-          mediaError = uploadResult.mediaError;
+          const driveFile = await uploadDriveFile(data.id, mediaFile);
+          uploadedDriveId = driveFile.id;
+          const { data: updatedTodo, error: updateError } = await supabase
+            .from("todos")
+            .update({
+              media_path: driveFile.id,
+              media_type: driveFile.mimeType,
+              media_name: driveFile.name,
+              media_provider: "drive",
+            })
+            .eq("id", data.id)
+            .select(TODO_COLUMNS)
+            .single();
+          if (updateError) {
+            const cleanupError = await deleteDriveMedia(driveFile.id);
+            uploadedDriveId = null;
+            throw new Error(
+              `${readableError(updateError)}${
+                cleanupError ? ` File Drive juga gagal dihapus: ${cleanupError}` : ""
+              }`,
+            );
+          }
+          createdTodo = {
+            ...updatedTodo,
+            ...driveMediaUrls(driveFile.id, driveFile.mimeType),
+          };
         }
         setTodos((current) => [createdTodo, ...current]);
         setTitle("");
         setDescription("");
         setDueDate("");
         setMediaFile(null);
-        if (mediaError) setTodoError(mediaError);
       } catch (uploadError) {
+        const mediaCleanupError = uploadedDriveId
+          ? await deleteDriveMedia(uploadedDriveId)
+          : "";
         const { error: rollbackError } = await supabase
           .from("todos")
           .delete()
           .eq("id", data.id);
         setTodoError(
           `${readableError(uploadError)}${
+            mediaCleanupError
+              ? ` File Drive juga gagal dihapus: ${mediaCleanupError}`
+              : ""
+          }${
             rollbackError
               ? ` Todo kosong tidak berhasil dibersihkan: ${readableError(rollbackError)}`
               : ""
@@ -331,33 +397,23 @@ export default function HomePage() {
     const previousTodo = todos.find((todo) => todo.id === editingId);
     let uploadedPath = null;
     try {
-      if (editMediaFile) {
-        const path = `${session.user.id}/${editingId}/${crypto.randomUUID()}.${mediaExtension(editMediaFile)}`;
-        const { error: uploadError } = await supabase.storage
-          .from(MEDIA_BUCKET)
-          .upload(path, editMediaFile, {
-            contentType: editMediaFile.type,
-            upsert: false,
-          });
-        if (uploadError) {
-          throw new Error(`Gagal mengunggah media: ${readableError(uploadError)}`);
-        }
-        uploadedPath = path;
-      }
-
       const changes = {
         title: cleanTitle,
         description: editDescription.trim() || null,
         due_date: editDueDate || null,
       };
       if (editMediaFile) {
-        changes.media_path = uploadedPath;
-        changes.media_type = editMediaFile.type;
-        changes.media_name = editMediaFile.name;
+        const driveFile = await uploadDriveFile(editingId, editMediaFile);
+        uploadedPath = driveFile.id;
+        changes.media_path = driveFile.id;
+        changes.media_type = driveFile.mimeType;
+        changes.media_name = driveFile.name;
+        changes.media_provider = "drive";
       } else if (removeEditMedia) {
         changes.media_path = null;
         changes.media_type = null;
         changes.media_name = null;
+        changes.media_provider = null;
       }
 
       const { data, error } = await supabase
@@ -368,18 +424,18 @@ export default function HomePage() {
         .single();
       if (error) throw error;
 
+      const savedDriveFileId = uploadedPath;
+      uploadedPath = null;
       let updatedTodo = {
         ...data,
         media_url: data.media_path ? previousTodo?.media_url : undefined,
+        media_preview_url: data.media_path ? previousTodo?.media_preview_url : undefined,
       };
-      if (editMediaFile) {
-        const { data: signedData, error: signedError } = await supabase.storage
-          .from(MEDIA_BUCKET)
-          .createSignedUrl(uploadedPath, 60 * 60 * 24);
-        updatedTodo = { ...data, media_url: signedData?.signedUrl };
-        if (signedError) {
-          setTodoError(`Media tersimpan, tetapi preview gagal dibuka: ${readableError(signedError)}`);
-        }
+      if (editMediaFile && savedDriveFileId) {
+        updatedTodo = {
+          ...data,
+          ...driveMediaUrls(savedDriveFileId, data.media_type),
+        };
       }
       setTodos((current) =>
         current.map((todo) => (todo.id === editingId ? updatedTodo : todo)),
@@ -387,9 +443,7 @@ export default function HomePage() {
       setEditingId(null);
       setEditMediaFile(null);
       if ((editMediaFile || removeEditMedia) && previousTodo?.media_path) {
-        const { error: removeError } = await supabase.storage
-          .from(MEDIA_BUCKET)
-          .remove([previousTodo.media_path]);
+        const removeError = await deleteTodoMedia(previousTodo);
         if (removeError) {
           setTodoError(`Todo tersimpan, tetapi media lama gagal dihapus: ${readableError(removeError)}`);
         }
@@ -397,11 +451,9 @@ export default function HomePage() {
     } catch (editError) {
       let cleanupMessage = "";
       if (uploadedPath) {
-        const { error: cleanupError } = await supabase.storage
-          .from(MEDIA_BUCKET)
-          .remove([uploadedPath]);
+        const cleanupError = await deleteDriveMedia(uploadedPath);
         if (cleanupError) {
-          cleanupMessage = ` Media baru juga gagal dibersihkan: ${readableError(cleanupError)}`;
+          cleanupMessage = ` File baru gagal dibersihkan dari Drive: ${cleanupError}`;
         }
       }
       setTodoError(`${readableError(editError)}${cleanupMessage}`);
@@ -439,9 +491,7 @@ export default function HomePage() {
     } else {
       setTodos((current) => current.filter((todo) => todo.id !== id));
       if (todo?.media_path) {
-        const { error: removeError } = await supabase.storage
-          .from(MEDIA_BUCKET)
-          .remove([todo.media_path]);
+        const removeError = await deleteTodoMedia(todo);
         if (removeError) {
           setTodoError(`Todo terhapus, tetapi media gagal dihapus: ${readableError(removeError)}`);
         }
@@ -569,6 +619,21 @@ export default function HomePage() {
               {!authBusy && <span aria-hidden="true">→</span>}
             </button>
           </form>
+          <div className="auth-divider"><span>atau lanjutkan dengan</span></div>
+          <button
+            type="button"
+            className="button google-auth-button"
+            onClick={handleGoogleAuth}
+            disabled={authBusy}
+          >
+            <svg aria-hidden="true" viewBox="0 0 48 48" className="google-icon">
+              <path fill="#4285F4" d="M43.6 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h11.1c-.5 2.7-2 5-4.3 6.5l7 5.4c4.1-3.8 6.5-9.4 6.5-15.9Z" />
+              <path fill="#34A853" d="M24 44c5.9 0 10.9-1.9 14.5-5.1l-7-5.4c-1.9 1.3-4.4 2.1-7.5 2.1-5.7 0-10.5-3.8-12.2-9l-7.2 5.6C8.2 39.2 15.6 44 24 44Z" />
+              <path fill="#FBBC05" d="M11.8 26.6a12 12 0 0 1 0-7.2L4.6 13.8a20 20 0 0 0 0 18.4l7.2-5.6Z" />
+              <path fill="#EA4335" d="M24 8.4c3.2 0 6.1 1.1 8.4 3.3l6.3-6.3C34.9 2 29.9 0 24 0 15.6 0 8.2 4.8 4.6 13.8l7.2 5.6C13.5 12.2 18.3 8.4 24 8.4Z" />
+            </svg>
+            {authBusy ? "Menghubungkan..." : "Lanjutkan dengan Google"}
+          </button>
           <p className="auth-footnote">
             {mode === "login" ? "Belum punya akun?" : "Sudah punya akun?"}{" "}
             <button
@@ -684,7 +749,7 @@ export default function HomePage() {
                     <button type="button" onClick={() => setMediaFile(null)} aria-label="Hapus pilihan media">×</button>
                   </span>
                 )}
-                <span className="media-hint">Maks. 20 MB</span>
+                <span className="media-hint">20 MB · link dapat dibagikan</span>
               </div>
               <div className="form-footer">
                 <label className="date-input">
@@ -789,7 +854,7 @@ export default function HomePage() {
                           </button>
                         )}
                         {editMediaFile && <span className="selected-media">{editMediaFile.name}</span>}
-                        <span className="media-hint">Maks. 20 MB</span>
+                        <span className="media-hint">20 MB · link dapat dibagikan</span>
                       </div>
                       <div className="form-footer">
                         <label className="date-input">
@@ -841,14 +906,31 @@ export default function HomePage() {
                               <img src={todo.media_url} alt={todo.media_name || "Lampiran todo"} />
                             )}
                             {todo.media_type?.startsWith("video/") && (
-                              <video src={todo.media_url} controls preload="metadata">
-                                Browser tidak mendukung pemutar video.
-                              </video>
+                              todo.media_provider === "drive" ? (
+                                <iframe
+                                  src={todo.media_preview_url}
+                                  title={todo.media_name || "Preview video"}
+                                  allow="autoplay"
+                                  allowFullScreen
+                                />
+                              ) : (
+                                <video src={todo.media_url} controls preload="metadata">
+                                  Browser tidak mendukung pemutar video.
+                                </video>
+                              )
                             )}
                             {todo.media_type?.startsWith("audio/") && (
-                              <audio src={todo.media_url} controls preload="metadata">
-                                Browser tidak mendukung pemutar audio.
-                              </audio>
+                              todo.media_provider === "drive" ? (
+                                <iframe
+                                  src={todo.media_preview_url}
+                                  title={todo.media_name || "Preview audio"}
+                                  allow="autoplay"
+                                />
+                              ) : (
+                                <audio src={todo.media_url} controls preload="metadata">
+                                  Browser tidak mendukung pemutar audio.
+                                </audio>
+                              )
                             )}
                             <a href={todo.media_url} target="_blank" rel="noreferrer">
                               Buka {todo.media_name || "lampiran"}

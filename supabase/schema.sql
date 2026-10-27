@@ -14,7 +14,8 @@ create table if not exists public.todos (
 alter table public.todos
   add column if not exists media_path text,
   add column if not exists media_type text,
-  add column if not exists media_name text;
+  add column if not exists media_name text,
+  add column if not exists media_provider text;
 
 create index if not exists todos_user_id_created_at_idx
   on public.todos (user_id, created_at desc);
@@ -64,47 +65,3 @@ create policy "Users can delete their own todos"
 
 grant usage on schema public to authenticated;
 grant select, insert, update, delete on public.todos to authenticated;
-
-insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values (
-  'todo-media',
-  'todo-media',
-  false,
-  20971520,
-  array[
-    'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/avif',
-    'video/mp4', 'video/webm', 'video/quicktime',
-    'audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/ogg', 'audio/webm'
-  ]
-)
-on conflict (id) do update
-set public = excluded.public,
-    file_size_limit = excluded.file_size_limit,
-    allowed_mime_types = excluded.allowed_mime_types;
-
-drop policy if exists "Users can view their own todo media" on storage.objects;
-create policy "Users can view their own todo media"
-  on storage.objects for select
-  to authenticated
-  using (
-    bucket_id = 'todo-media'
-    and (storage.foldername(name))[1] = (select auth.uid())::text
-  );
-
-drop policy if exists "Users can upload their own todo media" on storage.objects;
-create policy "Users can upload their own todo media"
-  on storage.objects for insert
-  to authenticated
-  with check (
-    bucket_id = 'todo-media'
-    and (storage.foldername(name))[1] = (select auth.uid())::text
-  );
-
-drop policy if exists "Users can delete their own todo media" on storage.objects;
-create policy "Users can delete their own todo media"
-  on storage.objects for delete
-  to authenticated
-  using (
-    bucket_id = 'todo-media'
-    and (storage.foldername(name))[1] = (select auth.uid())::text
-  );
