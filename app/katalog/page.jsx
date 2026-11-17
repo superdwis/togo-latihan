@@ -1,71 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { products } from "../../lib/catalog-products";
 import styles from "./page.module.css";
-
-const products = [
-  {
-    id: "kopi-gayo",
-    name: "Kopi Arabika Gayo",
-    category: "Minuman",
-    price: 68000,
-    compareAt: 78000,
-    description: "Biji kopi pilihan dengan aroma cokelat dan citrus yang lembut.",
-    icon: "☕",
-    color: "coffee",
-    badge: "Favorit",
-  },
-  {
-    id: "lilin-aroma",
-    name: "Lilin Aroma Senja",
-    category: "Rumah",
-    price: 89000,
-    description: "Aroma lavender dan kayu cedar untuk waktu istirahatmu.",
-    icon: "🕯️",
-    color: "candle",
-    badge: "Buatan lokal",
-  },
-  {
-    id: "tumbler-harian",
-    name: "Tumbler Harian",
-    category: "Aksesori",
-    price: 125000,
-    description: "Teman minum praktis dengan insulasi yang tahan lama.",
-    icon: "🥤",
-    color: "tumbler",
-    badge: "",
-  },
-  {
-    id: "totebag-kanvas",
-    name: "Totebag Kanvas",
-    category: "Aksesori",
-    price: 72000,
-    description: "Ringan, kuat, dan siap menemani kegiatan sehari-hari.",
-    icon: "👜",
-    color: "tote",
-    badge: "Pilihan ramah bumi",
-  },
-  {
-    id: "mug-keramik",
-    name: "Set Mug Keramik",
-    category: "Rumah",
-    price: 145000,
-    description: "Dua mug keramik handmade dengan glasir warna alami.",
-    icon: "🍵",
-    color: "mug",
-    badge: "",
-  },
-  {
-    id: "tanaman-mini",
-    name: "Tanaman Meja Mini",
-    category: "Rumah",
-    price: 54000,
-    description: "Sentuhan hijau yang mudah dirawat untuk sudut favoritmu.",
-    icon: "🪴",
-    color: "plant",
-    badge: "Stok terbatas",
-  },
-];
 
 const categories = ["Semua", ...new Set(products.map((product) => product.category))];
 
@@ -83,6 +20,10 @@ export default function CatalogPage() {
   const [cart, setCart] = useState({});
   const [cartOpen, setCartOpen] = useState(false);
   const [notice, setNotice] = useState("");
+  const [checkoutBusy, setCheckoutBusy] = useState(false);
+  const [checkoutError, setCheckoutError] = useState("");
+  const [checkoutOrder, setCheckoutOrder] = useState(null);
+  const [showCheckoutOrder, setShowCheckoutOrder] = useState(false);
 
   const visibleProducts = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase("id-ID");
@@ -110,6 +51,31 @@ export default function CatalogPage() {
     return () => window.clearTimeout(timeout);
   }, [notice]);
 
+  useEffect(() => {
+    if (!checkoutOrder || checkoutOrder.status !== "pending") return undefined;
+    let active = true;
+    const interval = window.setInterval(async () => {
+      try {
+        const response = await fetch(`/api/checkout/${checkoutOrder.id}`, {
+          cache: "no-store",
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "Status pembayaran gagal diperbarui.");
+        if (active) {
+          setCheckoutOrder((current) =>
+            current?.id === result.order.id ? { ...current, ...result.order } : current,
+          );
+        }
+      } catch (error) {
+        if (active) setCheckoutError(error.message || "Status pembayaran gagal diperbarui.");
+      }
+    }, 20_000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, [checkoutOrder]);
+
   function updateQuantity(productId, amount) {
     setCart((currentCart) => {
       const nextQuantity = (currentCart[productId] || 0) + amount;
@@ -124,7 +90,36 @@ export default function CatalogPage() {
 
   function addToCart(product) {
     updateQuantity(product.id, 1);
+    setShowCheckoutOrder(false);
+    setCheckoutError("");
     setNotice(`${product.name} ditambahkan ke keranjang.`);
+  }
+
+  async function handleCheckout() {
+    if (!cartItems.length || checkoutBusy) return;
+    setCheckoutBusy(true);
+    setCheckoutError("");
+    try {
+      const response = await fetch("/api/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: cartItems.map((product) => ({
+            productId: product.id,
+            quantity: cart[product.id],
+          })),
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Pembayaran QRIS gagal dibuat.");
+      setCheckoutOrder(result.order);
+      setShowCheckoutOrder(true);
+      setCart({});
+    } catch (error) {
+      setCheckoutError(error.message || "Pembayaran QRIS gagal dibuat. Coba lagi.");
+    } finally {
+      setCheckoutBusy(false);
+    }
   }
 
   return (
@@ -287,18 +282,67 @@ export default function CatalogPage() {
             <div className={styles.drawerHeader}>
               <div>
                 <p className={styles.eyebrow}>BELANJAANMU</p>
-                <h2>Keranjang<span>.</span></h2>
+                <h2>{showCheckoutOrder ? "Pembayaran" : "Keranjang"}<span>.</span></h2>
               </div>
               <button
                 className={styles.closeButton}
                 type="button"
                 aria-label="Tutup keranjang"
-                onClick={() => setCartOpen(false)}
+                onClick={() => { setCartOpen(false); setShowCheckoutOrder(false); }}
               >
                 ×
               </button>
             </div>
-            {cartItems.length ? (
+            {showCheckoutOrder && checkoutOrder ? (
+              <div className={styles.paymentPanel}>
+                <p className={styles.paymentIntro}>
+                  {checkoutOrder.status === "success"
+                    ? "Pembayaran berhasil diterima."
+                    : checkoutOrder.status === "expired"
+                      ? "QRIS sudah kedaluwarsa. Silakan buat pembayaran baru."
+                      : checkoutOrder.status === "failed"
+                        ? "Pembayaran gagal. Silakan coba kembali."
+                        : "Pindai QRIS berikut untuk menyelesaikan pembayaran."}
+                </p>
+                {checkoutOrder.isTest && (
+                  <p className={styles.testModeNotice} role="status">
+                    Mode TEST: transaksi sandbox, tidak menggunakan uang sungguhan.
+                  </p>
+                )}
+                {checkoutOrder.status === "pending" && (
+                  <>
+                    {checkoutOrder.qrImage ? (
+                      <img className={styles.paymentQr} src={checkoutOrder.qrImage} alt="QRIS pembayaran" />
+                    ) : checkoutOrder.paymentUrl ? (
+                      <a className={styles.paymentLink} href={checkoutOrder.paymentUrl} target="_blank" rel="noreferrer">
+                        Buka halaman pembayaran
+                      </a>
+                    ) : (
+                      <p className={styles.checkoutError}>QR pembayaran tidak tersedia.</p>
+                    )}
+                    <p className={styles.paymentAmount}>Total pembayaran</p>
+                    <strong className={styles.paymentTotal}>{formatPrice(checkoutOrder.totalAmount)}</strong>
+                    <p className={styles.paymentReference}>ID transaksi: {checkoutOrder.transactionId}</p>
+                    {checkoutOrder.expiredAt && (
+                      <p className={styles.paymentExpiry}>
+                        Batas pembayaran: {new Intl.DateTimeFormat("id-ID", {
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                        }).format(new Date(checkoutOrder.expiredAt))}
+                      </p>
+                    )}
+                    <p className={styles.paymentWaiting}>Status diperbarui otomatis setelah pembayaran terkonfirmasi.</p>
+                  </>
+                )}
+                <button
+                  className={styles.backToCartButton}
+                  type="button"
+                  onClick={() => setShowCheckoutOrder(false)}
+                >
+                  Kembali ke keranjang
+                </button>
+              </div>
+            ) : cartItems.length ? (
               <>
                 <div className={styles.cartItems}>
                   {cartItems.map((product) => (
@@ -329,11 +373,21 @@ export default function CatalogPage() {
                 </div>
                 <div className={styles.cartSummary}>
                   <div><span>Subtotal</span><strong>{formatPrice(cartTotal)}</strong></div>
-                  <p>Biaya pengiriman dihitung pada tahap berikutnya.</p>
-                  <button className={styles.checkoutButton} type="button" disabled>
-                    Pembayaran segera hadir
+                  <p>Biaya admin QRIS mengikuti informasi yang diberikan saat pembayaran.</p>
+                  {checkoutError && <p className={styles.checkoutError} role="alert">{checkoutError}</p>}
+                  <button
+                    className={styles.checkoutButton}
+                    type="button"
+                    onClick={handleCheckout}
+                    disabled={checkoutBusy || cartTotal < 1000 || cartTotal > 5000000}
+                  >
+                    {checkoutBusy ? "Menyiapkan QRIS..." : "Bayar dengan QRIS"}
                   </button>
-                  <span className={styles.checkoutHint}>Checkout dan pembayaran QRIS akan ditambahkan pada tahap berikutnya.</span>
+                  <span className={styles.checkoutHint}>
+                    {cartTotal > 5000000
+                      ? "Maksimum transaksi QRIS Rp 5.000.000."
+                      : "Pembayaran diproses dengan aman melalui BuatQris."}
+                  </span>
                 </div>
               </>
             ) : (

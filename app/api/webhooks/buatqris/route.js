@@ -99,19 +99,34 @@ export async function POST(request) {
       persistSession: false,
     },
   });
-  const { error } = await supabase.from("buatqris_webhook_events").insert({
+  const { error: insertError } = await supabase.from("buatqris_webhook_events").insert({
     event: payload.event,
     delivery_id: deliveryId,
     payload,
   });
 
-  if (error?.code === "23505") {
-    return jsonResponse({ received: true, duplicate: true });
-  }
-  if (error) {
-    console.error("Could not save verified BuatQris webhook event.", error);
+  const duplicate = insertError?.code === "23505";
+  if (insertError && !duplicate) {
+    console.error("Could not save verified BuatQris webhook event.", insertError);
     return jsonResponse({ error: "Webhook belum dapat disimpan." }, 500);
   }
 
-  return jsonResponse({ received: true, duplicate: false });
+  const paymentStatus = {
+    "payment.success": "success",
+    "payment.expired": "expired",
+    "payment.failed": "failed",
+  }[payload.event];
+  if (paymentStatus) {
+    const { error: updateError } = await supabase
+      .from("product_orders")
+      .update({ status: paymentStatus })
+      .eq("transaction_id", deliveryId)
+      .in("status", ["processing", "pending"]);
+    if (updateError) {
+      console.error("Could not update product order from BuatQris webhook.", updateError);
+      return jsonResponse({ error: "Status pesanan belum dapat diperbarui." }, 500);
+    }
+  }
+
+  return jsonResponse({ received: true, duplicate });
 }

@@ -202,7 +202,22 @@
 .cartSummary > div strong { color: #3e5842; }
 .cartSummary > p { margin: 8px 0 15px; color: #929a91; font-size: 9px; }
 .checkoutButton { width: 100%; min-height: 42px; border: 0; border-radius: 5px; color: white; background: #8e9a89; font-size: 11px; font-weight: 700; }
+.checkoutButton:not(:disabled) { background: var(--store-green); transition: background 0.18s ease; }
+.checkoutButton:not(:disabled):hover { background: var(--store-dark-green); }
+.checkoutButton:disabled { cursor: not-allowed; opacity: 0.66; }
 .checkoutHint { display: block; margin-top: 9px; color: #969d94; text-align: center; font-size: 9px; line-height: 1.5; }
+.checkoutError { margin: 0 0 10px !important; color: #a33e36 !important; font-size: 10px !important; line-height: 1.5; }
+.paymentPanel { display: flex; flex: 1; flex-direction: column; align-items: center; overflow-y: auto; padding: 18px 0 5px; text-align: center; }
+.paymentIntro { margin: 0 0 14px; color: #68766a; font-size: 11px; line-height: 1.6; }
+.testModeNotice { width: 100%; margin: 0 0 14px; padding: 9px 10px; border: 1px solid #ead9aa; border-radius: 4px; color: #79602c; background: #fcf7e9; font-size: 10px; line-height: 1.5; }
+.paymentQr { display: block; width: min(100%, 260px); aspect-ratio: 1; object-fit: contain; border: 1px solid var(--store-line); border-radius: 5px; background: white; }
+.paymentLink { display: inline-flex; min-height: 42px; align-items: center; justify-content: center; padding: 0 16px; border-radius: 5px; color: white; background: var(--store-green); font-size: 11px; font-weight: 700; }
+.paymentAmount { margin: 17px 0 5px; color: #8d968d; font-size: 10px; }
+.paymentTotal { color: var(--store-dark-green); font-size: 23px; }
+.paymentReference { margin: 9px 0 0; color: #7d897d; font-size: 10px; }
+.paymentExpiry { margin: 7px 0 0; color: #8d968d; font-size: 9px; }
+.paymentWaiting { margin: 15px 0; color: #849080; font-size: 9px; line-height: 1.5; }
+.backToCartButton { width: 100%; min-height: 39px; margin-top: auto; border: 1px solid #dfe7db; border-radius: 5px; color: var(--store-dark-green); background: #f5f8f2; font-size: 10px; font-weight: 700; }
 .cartEmpty { display: grid; flex: 1; align-content: center; justify-items: center; padding: 25px; text-align: center; }
 .cartEmpty > span { display: grid; width: 54px; height: 54px; place-items: center; border-radius: 50%; color: #81967a; background: #edf2e9; font-size: 30px; }
 .cartEmpty h3 { margin: 15px 0 7px; font-family: Georgia, serif; font-size: 19px; font-weight: 400; }

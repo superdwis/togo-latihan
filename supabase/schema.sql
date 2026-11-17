@@ -499,3 +499,32 @@ create table if not exists public.buatqris_webhook_events (
 );
 
 alter table public.buatqris_webhook_events enable row level security;
+
+create table if not exists public.product_orders (
+  id uuid primary key default gen_random_uuid(),
+  transaction_id text unique,
+  status text not null default 'processing'
+    check (status in ('processing', 'pending', 'success', 'expired', 'failed')),
+  is_test boolean not null default false,
+  amount integer not null check (amount between 1000 and 5000000),
+  total_amount integer check (total_amount is null or total_amount >= amount),
+  amount_uniq integer,
+  admin_fee integer,
+  credit_amount integer,
+  fee_by text check (fee_by is null or fee_by in ('user', 'buyer')),
+  qris_method text,
+  items jsonb not null,
+  qr_image text,
+  qr_url text,
+  payment_url text,
+  expired_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.product_orders
+  add column if not exists is_test boolean not null default false;
+
+create index if not exists product_orders_status_created_idx
+  on public.product_orders (status, created_at desc);
+alter table public.product_orders enable row level security;
