@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { getSupabaseBrowserClient } from "../lib/supabase";
+import ChatWorkspace from "./components/ChatWorkspace";
+import InvitationWorkspace from "./components/InvitationWorkspace";
 
 const filters = [
   { id: "all", label: "Semua" },
@@ -98,6 +100,7 @@ export default function HomePage() {
   const [editDueDate, setEditDueDate] = useState("");
   const [editMediaFile, setEditMediaFile] = useState(null);
   const [removeEditMedia, setRemoveEditMedia] = useState(false);
+  const [activeSection, setActiveSection] = useState("todos");
 
   useEffect(() => {
     if (!supabase) {
@@ -657,11 +660,35 @@ export default function HomePage() {
           <span>rapi</span>
         </a>
         <div className="sidebar-label">WORKSPACE</div>
-        <div className="sidebar-link selected">
+        <button
+          className={`sidebar-link${activeSection === "todos" ? " selected" : ""}`}
+          onClick={() => setActiveSection("todos")}
+          aria-current={activeSection === "todos" ? "page" : undefined}
+        >
           <span className="nav-icon">▦</span>
           <span>Daftar tugas</span>
           <span className="nav-count">{todos.length}</span>
-        </div>
+        </button>
+        <button
+          className={`sidebar-link${activeSection === "chat" ? " selected" : ""}`}
+          onClick={() => setActiveSection("chat")}
+          aria-current={activeSection === "chat" ? "page" : undefined}
+        >
+          <span className="nav-icon">✳</span>
+          <span>Chat AI</span>
+        </button>
+        <button
+          className={`sidebar-link${activeSection === "invitations" ? " selected" : ""}`}
+          onClick={() => setActiveSection("invitations")}
+          aria-current={activeSection === "invitations" ? "page" : undefined}
+        >
+          <span className="nav-icon">✉</span>
+          <span>Undangan</span>
+        </button>
+        <a className="sidebar-link" href="/katalog">
+          <span className="nav-icon">◈</span>
+          <span>Katalog produk</span>
+        </a>
         <div className="sidebar-bottom">
           <div className="user-avatar">{session.user.email?.[0]?.toUpperCase()}</div>
           <div className="user-info">
@@ -676,7 +703,14 @@ export default function HomePage() {
 
       <section className="main-panel">
         <header className="topbar">
-          <span className="breadcrumb">Workspace <span>/</span> Daftar tugas</span>
+          <span className="breadcrumb">
+            Workspace <span>/</span>{" "}
+            {activeSection === "todos"
+              ? "Daftar tugas"
+              : activeSection === "chat"
+                ? "Chat AI"
+                : "Kelola undangan"}
+          </span>
           <span className="today-label">
             {new Intl.DateTimeFormat("id-ID", {
               weekday: "long",
@@ -687,6 +721,8 @@ export default function HomePage() {
         </header>
 
         <div className="content">
+          {activeSection === "todos" ? (
+            <>
           <div className="page-heading">
             <div>
               <p className="eyebrow">RUANG KERJAMU</p>
@@ -959,6 +995,12 @@ export default function HomePage() {
             </div>
           )}
           <footer className="page-footer">Dibuat untuk membantumu tetap fokus <span>✳</span></footer>
+            </>
+          ) : activeSection === "chat" ? (
+            <ChatWorkspace userInitial={session.user.email?.[0]?.toUpperCase() || "U"} />
+          ) : (
+            <InvitationWorkspace />
+          )}
         </div>
       </section>
     </main>
